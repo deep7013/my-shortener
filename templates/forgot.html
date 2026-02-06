@@ -1,0 +1,113 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Forgot Password</title>
+</head>
+<body>
+
+<h2>Reset Password</h2>
+
+<div id="step-1">
+  <input type="email" id="email" placeholder="Enter email" />
+  <button onclick="sendOTP()">Send OTP</button>
+</div>
+
+<div id="step-2" style="display:none;">
+  <input type="text" id="otp" placeholder="Enter OTP" />
+  <button onclick="verifyOTP()">Verify OTP</button>
+</div>
+
+<div id="step-3" style="display:none;">
+  <input type="password" id="new-password" placeholder="New password" />
+  <button onclick="resetPassword()">Set New Password</button>
+</div>
+<script>
+let savedEmail = ""
+
+/* =========================
+   STEP 1: SEND OTP
+========================= */
+async function sendOTP() {
+  savedEmail = document.getElementById("email").value
+
+  const res = await fetch("/api/auth/forgot-password", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ email: savedEmail })
+  })
+
+  const data = await res.json()
+
+  if (!res.ok && data.error === "GOOGLE_ACCOUNT") {
+    alert("This account uses Google Sign-In. Please sign in with Google.")
+    window.location.href = "/login/google"
+    return
+  }
+
+  alert("If the email exists, an OTP has been sent.")
+
+  document.getElementById("step-1").style.display = "none"
+  document.getElementById("step-2").style.display = "block"
+}
+
+/* =========================
+   STEP 2: VERIFY OTP
+========================= */
+async function verifyOTP() {
+  const otp = document.getElementById("otp").value
+
+  const res = await fetch("/api/auth/verify-otp", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      email: savedEmail,
+      otp: otp
+    })
+  })
+
+  const data = await res.json()
+
+  if (!res.ok) {
+    alert(data.error || "Invalid or expired OTP")
+    return
+  }
+
+  alert("OTP verified")
+
+  document.getElementById("step-2").style.display = "none"
+  document.getElementById("step-3").style.display = "block"
+}
+
+/* =========================
+   STEP 3: RESET PASSWORD
+========================= */
+async function resetPassword() {
+  const new_password = document.getElementById("new-password").value
+
+  const res = await fetch("/api/auth/reset-password", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      email: savedEmail,
+      new_password: new_password
+    })
+  })
+
+  const data = await res.json()
+
+  if (!res.ok) {
+    alert(data.error || "Password reset failed")
+    return
+  }
+
+alert("Password updated. Logged in.")
+window.location.href = "/dashboard"
+
+  alert("Password updated. Logged in.")
+  window.location.href = "/"
+}
+</script>
+
+
+</body>
+</html>

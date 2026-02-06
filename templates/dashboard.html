@@ -1,0 +1,294 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Dashboard · My Shortener</title>
+
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      background: #f5f7fa;
+      margin: 0;
+      padding: 30px;
+    }
+
+    .container {
+      max-width: 1100px;
+      margin: auto;
+    }
+
+    h1 { margin-bottom: 4px; }
+    h3 { margin-top: 0; }
+
+    .muted {
+      color: #666;
+      font-size: 14px;
+    }
+
+    .top-bar {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 25px;
+    }
+
+    .card {
+      background: #fff;
+      padding: 20px;
+      border-radius: 6px;
+      box-shadow: 0 2px 8px rgba(0,0,0,.08);
+      margin-bottom: 25px;
+    }
+
+    input, button {
+      padding: 10px;
+      font-size: 14px;
+    }
+
+    input {
+      width: 100%;
+      margin-bottom: 10px;
+    }
+
+    button {
+      cursor: pointer;
+    }
+
+    .primary {
+      background: #2563eb;
+      color: white;
+      border: none;
+    }
+
+    .danger {
+      background: #dc2626;
+      color: white;
+      border: none;
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      margin-top: 10px;
+    }
+
+    th, td {
+      border-bottom: 1px solid #eee;
+      padding: 10px;
+      text-align: left;
+      font-size: 14px;
+      vertical-align: middle;
+    }
+
+    th {
+      background: #f1f5f9;
+    }
+
+    .short-link {
+      color: #2563eb;
+      text-decoration: none;
+      font-weight: bold;
+    }
+
+    .short-link:hover {
+      text-decoration: underline;
+    }
+
+    .result-box {
+      margin-top: 10px;
+      background: #eef;
+      padding: 10px;
+      border-radius: 4px;
+      word-break: break-all;
+    }
+
+    .recent-box {
+      background: #f9fafb;
+      padding: 15px;
+      border-radius: 6px;
+      margin-bottom: 25px;
+      display: flex;
+      gap: 40px;
+      flex-wrap: wrap;
+    }
+
+    .recent-box p {
+      margin: 0;
+    }
+  </style>
+</head>
+
+<body>
+
+<div class="container">
+
+  <!-- TOP BAR -->
+  <div class="top-bar">
+    <div>
+      <h1>Dashboard</h1>
+      <p class="muted">Logged in as <b>{{ user.email }}</b></p>
+    </div>
+    <a href="/logout">Logout</a>
+  </div>
+
+  <!-- RECENT ACTIVITY -->
+  <div class="recent-box">
+
+    <div>
+      <b>Last shortened</b><br>
+      {% if last_shortened %}
+        <a class="short-link" href="/{{ last_shortened.short }}" target="_blank">
+          {{ request.host }}/{{ last_shortened.short }}
+        </a><br>
+        <small class="muted">
+          {{ last_shortened.created_at.strftime("%Y-%m-%d %H:%M:%S") }}
+        </small>
+      {% else %}
+        <span class="muted">No links yet</span>
+      {% endif %}
+    </div>
+
+    <div>
+      <b>Last clicked</b><br>
+      {% if last_used %}
+  <a class="short-link" href="/{{ last_used.slug }}" target="_blank">
+    {{ request.host }}/{{ last_used.slug }}
+  </a><br>
+  <small class="muted">
+    {{ last_used.last_clicked.strftime("%Y-%m-%d %H:%M:%S") }}
+  </small>
+{% else %}
+  <span class="muted">No clicks yet</span>
+{% endif %}
+
+    </div>
+
+  </div>
+
+  <!-- SHORTEN -->
+  <div class="card">
+    <h3>Shorten a URL</h3>
+
+    <form id="shorten-form">
+      <input type="url" id="url" placeholder="Enter long URL" required>
+      <input type="text" id="vanity" placeholder="Vanity slug (optional)">
+      <input type="number" id="expires" placeholder="Expires in days (optional)">
+      <button class="primary" type="submit">Shorten</button>
+    </form>
+
+    <div id="result"></div>
+  </div>
+
+  <!-- LINKS TABLE -->
+  <div class="card">
+    <h3>Your Links</h3>
+
+    <table>
+      <thead>
+        <tr>
+          <th>Short</th>
+          <th>Original URL</th>
+          <th>Total Clicks</th>
+          <th>Last Used</th>
+          <th>Action</th>
+        </tr>
+      </thead>
+      <tbody id="links-table">
+  {% for link, total_clicks, unique_clicks, last_click in links %}
+  <tr id="link-row-{{ link.id }}">
+    <td>
+      <a class="short-link" href="/{{ link.slug }}" target="_blank">
+        {{ request.host }}/{{ link.slug }}
+      </a>
+    </td>
+
+    <td style="word-break:break-all;">
+      {{ link.long }}
+    </td>
+
+    <td>
+      {{ total_clicks }}
+    </td>
+
+    <td>
+      {% if last_click %}
+        {{ last_click.strftime("%Y-%m-%d %H:%M:%S") }}
+      {% else %}
+        —
+      {% endif %}
+    </td>
+
+    <td>
+      <button class="danger" onclick="deleteLink({{ link.id }})">
+        Delete
+      </button>
+    </td>
+  </tr>
+  {% endfor %}
+</tbody>
+
+    </table>
+  </div>
+
+</div>
+
+<script>
+/* SHORTEN */
+document.getElementById("shorten-form").addEventListener("submit", async (e) => {
+  e.preventDefault();
+
+  const payload = {
+    long_url: document.getElementById("url").value,
+    vanity: document.getElementById("vanity").value || null,
+    expires_days: document.getElementById("expires").value || null
+  };
+
+  const res = await fetch("/api/shorten", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    credentials: "same-origin",
+    body: JSON.stringify(payload)
+  });
+
+  const data = await res.json();
+
+  if (!res.ok) {
+    alert(data.error || "Shorten failed");
+    return;
+  }
+
+  document.getElementById("result").innerHTML = `
+    <div class="result-box">
+      <b>Short link:</b>
+      <a href="${data.short_url}" target="_blank">${data.short_url}</a>
+    </div>
+  `;
+
+  // ⏳ Bitly-like refresh (30s)
+  setTimeout(() => {
+    window.location.reload();
+  }, 10000);
+});
+
+/* DELETE */
+async function deleteLink(linkId) {
+  if (!confirm("Delete this link permanently?")) return;
+
+  const res = await fetch(`/api/links/${linkId}/delete`, {
+    method: "POST",
+    credentials: "same-origin"
+  });
+
+  const data = await res.json();
+
+  if (res.ok) {
+    document.getElementById(`link-row-${linkId}`).remove();
+  } else {
+    alert(data.error || "Failed to delete link");
+  }
+}
+
+</script>
+
+</body>
+</html>

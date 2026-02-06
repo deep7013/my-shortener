@@ -1,0 +1,291 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Admin Dashboard · My Shortener</title>
+
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      background: #f5f7fa;
+      margin: 0;
+      padding: 30px;
+    }
+
+    .container {
+      max-width: 1200px;
+      margin: auto;
+    }
+
+    h1, h2 {
+      margin: 0 0 10px;
+    }
+
+    .muted {
+      color: #666;
+      font-size: 14px;
+    }
+
+    .top-bar {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 30px;
+    }
+
+    .card {
+      background: #fff;
+      padding: 20px;
+      border-radius: 6px;
+      box-shadow: 0 2px 8px rgba(0,0,0,.08);
+      margin-bottom: 30px;
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      margin-top: 10px;
+    }
+
+    th, td {
+      border-bottom: 1px solid #eee;
+      padding: 10px;
+      text-align: left;
+      font-size: 14px;
+      vertical-align: middle;
+    }
+
+    th {
+      background: #f1f5f9;
+    }
+
+    a {
+      color: #2563eb;
+      text-decoration: none;
+      font-weight: 500;
+    }
+
+    a:hover {
+      text-decoration: underline;
+    }
+
+    .danger {
+      background: #dc2626;
+      color: #fff;
+      border: none;
+      padding: 6px 10px;
+      cursor: pointer;
+      border-radius: 4px;
+    }
+
+    .danger:hover {
+      background: #b91c1c;
+    }
+
+    .actions {
+      display: flex;
+      gap: 8px;
+    }
+  </style>
+</head>
+
+<body>
+
+<div class="container">
+
+  <!-- TOP BAR -->
+  <div class="top-bar">
+    <div>
+      <h1>Admin Dashboard</h1>
+      <p class="muted">
+        Logged in as <b>{{ current_user.email }}</b>
+      </p>
+    </div>
+    <a href="/logout">Logout</a>
+  </div>
+
+  <!-- USERS -->
+  <div class="card">
+    <h2>Users</h2>
+
+    {% if users %}
+    <table>
+      <thead>
+        <tr>
+          <th>ID</th>
+          <th>Email</th>
+          <th>Role</th>
+          <th>Total Clicks</th>
+          <th>Joined</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for user, click_count in users %}
+        <tr>
+          <td>{{ user.id }}</td>
+          <td>{{ user.email }}</td>
+          <td>{{ user.role }}</td>
+          <td>{{ click_count }}</td>
+          <td>{{ user.created_at.strftime("%Y-%m-%d %H:%M:%S") }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% else %}
+      <p class="muted">No users found.</p>
+    {% endif %}
+  </div>
+
+  <!-- LINKS -->
+  <div class="card">
+    <h2>All Shortened Links</h2>
+
+    {% if links %}
+    <table>
+      <thead>
+        <tr>
+          <th>Short</th>
+          <th>Original URL</th>
+          <th>Clicks</th>
+          <th>Last Click</th>
+          <th>Owner</th>
+          <th>Action</th>
+        </tr>
+      </thead>
+
+      <tbody>
+        {% for link in links %}
+        <tr id="link-row-{{ link.id }}">
+          <td>
+            <a href="/{{ link.slug }}" target="_blank">
+              {{ request.host }}/{{ link.slug }}
+            </a>
+          </td>
+
+          <td style="word-break: break-all;">
+            {{ link.long }}
+          </td>
+
+          <td>{{ link.clicks }}</td>
+
+          <td>
+            {% if link.last_clicked %}
+              {{ link.last_clicked.strftime("%Y-%m-%d %H:%M:%S") }}
+            {% else %}
+              —
+            {% endif %}
+          </td>
+
+          <td>
+            {% if link.owner %}
+              {{ link.owner.email }}
+            {% else %}
+              Anonymous
+            {% endif %}
+          </td>
+
+          <td class="actions">
+            <button class="danger" onclick="deleteLink({{ link.id }})">
+              Delete
+            </button>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% else %}
+      <p class="muted">No links found.</p>
+    {% endif %}
+  </div>
+  <div class="card">
+  <h3>Users</h3>
+
+  {% if users %}
+  <table>
+    <thead>
+      <tr>
+        <th>Email</th>
+        <th>Role</th>
+        <th>Links</th>
+        <th>Joined</th>
+        <th>Action</th>
+      </tr>
+    </thead>
+    <tbody id="users-table">
+      {% for user, click_count in users %}
+      <tr id="user-row-{{ user.id }}">
+        <td>{{ user.email }}</td>
+        <td>{{ user.role }}</td>
+        <td>{{ user.links | length }}</td>
+        <td>{{ user.created_at.strftime("%Y-%m-%d") }}</td>
+        <td>
+          {% if user.id != current_user.id %}
+            <button
+              class="danger"
+              onclick="deleteUser({{ user.id }})">
+              Delete
+            </button>
+          {% else %}
+            <span class="muted">You</span>
+          {% endif %}
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+    <p class="muted">No users found.</p>
+  {% endif %}
+</div>
+
+
+</div>
+
+<script>
+  async function deleteUser(userId) {
+  if (!confirm("Delete this user and ALL their links?")) return;
+
+  const res = await fetch(`/api/admin/users/${userId}`, {
+    method: "DELETE",
+    credentials: "same-origin"
+  });
+
+  const data = await res.json();
+
+  if (!res.ok) {
+    alert(data.error || "Failed to delete user");
+    return;
+  }
+
+  // Remove row instantly
+  document.getElementById(`user-row-${userId}`)?.remove();
+}
+/* ===============================
+   POLLING (ADMIN SAFE MODE)
+   Refresh every 30 seconds
+================================ */
+setInterval(() => {
+  window.location.reload();
+}, 30000);
+
+/* ===============================
+   DELETE LINK (AJAX)
+================================ */
+async function deleteLink(linkId) {
+  if (!confirm("Delete this link permanently?")) return;
+
+  const res = await fetch(`/admin/delete/${linkId}`, {
+    method: "POST",
+    credentials: "same-origin"
+  });
+
+  if (res.ok) {
+    document.getElementById(`link-row-${linkId}`)?.remove();
+  } else {
+    alert("Failed to delete link");
+  }
+}
+</script>
+
+</body>
+</html>

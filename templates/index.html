@@ -1,0 +1,227 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>My Shortener</title>
+
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      background: #f4f6f8;
+      padding: 40px;
+    }
+
+    .box {
+      background: white;
+      padding: 20px;
+      max-width: 500px;
+      margin: auto;
+      border-radius: 6px;
+      box-shadow: 0 0 10px rgba(0,0,0,.1);
+    }
+
+    input, button {
+      width: 100%;
+      padding: 10px;
+      margin-top: 10px;
+      font-size: 15px;
+    }
+
+    .top {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 10px;
+    }
+
+    .link {
+      margin-top: 10px;
+      background: #eef;
+      padding: 8px;
+      word-break: break-all;
+    }
+
+    /* ===== MODAL ===== */
+    .overlay {
+      position: fixed;
+      inset: 0;
+      background: rgba(0,0,0,0.55);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      z-index: 9999;
+    }
+
+    .hidden {
+      display: none;
+    }
+
+    .modal {
+      background: #fff;
+      width: 100%;
+      max-width: 380px;
+      padding: 30px;
+      border-radius: 8px;
+      position: relative;
+      box-shadow: 0 20px 40px rgba(0,0,0,0.2);
+    }
+
+    .modal-title {
+      margin-bottom: 20px;
+      text-align: center;
+    }
+
+    .primary-btn {
+      background: #2563eb;
+      color: white;
+      border: none;
+      cursor: pointer;
+    }
+
+    .primary-btn:hover {
+      background: #1e4ed8;
+    }
+
+    .google-btn {
+      display: block;
+      text-align: center;
+      padding: 12px;
+      border: 1px solid #ccc;
+      text-decoration: none;
+      color: #000;
+      margin-top: 10px;
+    }
+
+    .divider {
+      text-align: center;
+      margin: 20px 0;
+      position: relative;
+    }
+
+    .divider span {
+      background: #fff;
+      padding: 0 10px;
+      color: #777;
+    }
+
+    .divider::before {
+      content: "";
+      position: absolute;
+      left: 0;
+      right: 0;
+      top: 50%;
+      height: 1px;
+      background: #ddd;
+    }
+
+    .error {
+      color: #dc2626;
+      font-size: 14px;
+      margin-bottom: 10px;
+      text-align: center;
+    }
+
+    .link-btn {
+      background: none;
+      border: none;
+      color: #2563eb;
+      cursor: pointer;
+      font-size: 14px;
+      padding: 0;
+    }
+
+    .footer-text {
+      text-align: center;
+      font-size: 14px;
+      margin-top: 15px;
+    }
+
+    .close-btn {
+      position: absolute;
+      top: 10px;
+      right: 12px;
+      background: none;
+      border: none;
+      font-size: 22px;
+      cursor: pointer;
+    }
+  </style>
+</head>
+
+<body>
+
+<div class="box">
+
+  <div class="top">
+    <div id="user-info">Guest (5 links/hour)</div>
+    <div id="auth-actions"></div>
+  </div>
+
+  <h2>URL Shortener</h2>
+
+  <form id="shorten-form">
+    <input type="url" id="url" placeholder="Enter long URL" required>
+    <input type="text" id="vanity" placeholder="Vanity slug (optional)">
+    <input type="number" id="expires" placeholder="Expires in days (optional)">
+    <button type="submit">Shorten</button>
+  </form>
+
+  <div id="result"></div>
+
+</div>
+
+<!-- ================= AUTH MODAL ================= -->
+<div id="auth-overlay" class="overlay hidden">
+
+  <div class="modal">
+
+    <button class="close-btn" onclick="closeAuthModal()">×</button>
+
+    <h2 id="auth-title" class="modal-title">Login</h2>
+
+    <p id="auth-error" class="error hidden"></p>
+
+    <input
+      type="email"
+      id="auth-email"
+      placeholder="Email address"
+      autocomplete="email"
+    />
+
+    <input
+      type="password"
+      id="auth-password"
+      placeholder="Password"
+      autocomplete="current-password"
+    />
+
+    <button id="auth-submit" class="primary-btn">
+      Login
+    </button>
+
+    <div id="forgot-wrap" class="hidden" style="text-align:center; margin-top:10px;">
+      <button id="forgot-btn" class="link-btn">
+        Forgot password?
+      </button>
+    </div>
+
+    <div class="divider">
+      <span>OR</span>
+    </div>
+
+    <a href="/login/google" class="google-btn">
+      Continue with Google
+    </a>
+
+    <p class="footer-text">
+      <span id="auth-toggle" class="link-btn">
+        New user? Create account
+      </span>
+    </p>
+
+  </div>
+</div>
+
+<script src="/static/app.js"></script>
+</body>
+</html>

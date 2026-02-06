@@ -1,0 +1,104 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8">
+    <title>Shortened</title>
+    <style>
+      body {
+        font-family: Arial, sans-serif;
+        background: #f7f7f7;
+        padding: 40px;
+      }
+      h2 {
+        color: #333;
+      }
+      a {
+        color: #1a0dab;
+        text-decoration: none;
+      }
+      a:hover {
+        text-decoration: underline;
+      }
+      .result-box {
+        margin-top: 20px;
+      }
+      input[type="text"] {
+        width: 300px;
+        padding: 8px;
+        font-size: 16px;
+      }
+      button {
+        padding: 8px 12px;
+        font-size: 16px;
+        cursor: pointer;
+      }
+      .result-box {
+  margin-top: 20px;
+}
+
+.result-box input {
+  width: 60%;
+  padding: 8px;
+  font-size: 16px;
+}
+
+.result-box button {
+  padding: 8px 12px;
+  font-size: 16px;
+  cursor: pointer;
+}
+    </style>
+
+  </head>
+  <body>
+    <h2>Short link created</h2>
+
+    <p>Original: <a href="{{ long_url }}">{{ long_url }}</a></p>
+    <p>Short: <a href="{{ short_link }}">{{ short_link }}</a></p>
+
+    <!-- QR preview + link -->
+    <p>QR Code:</p>
+    <p>
+      <a href="{{ qr_url }}" target="_blank">
+        <img src="{{ qr_url }}" alt="QR Code" width="200">
+      </a>
+    </p>
+
+    <p><a href="{{ url_for('index') }}">Shorten another</a></p>
+    <div class="result-box">
+  <input
+    type="text"
+    id="shortUrl"
+    value="{{ short_link }}"
+    readonly
+  />
+
+  <button onclick="copyShortUrl()" id="copyBtn">
+    📋 Copy
+  </button>
+
+  <span id="copyStatus" style="margin-left:10px;"></span>
+</div>
+<script>
+function copyShortUrl() {
+  const input = document.getElementById("shortUrl");
+  const status = document.getElementById("copyStatus");
+
+  navigator.clipboard.writeText(input.value)
+    .then(() => {
+      status.textContent = "Copied!";
+      status.style.color = "green";
+
+      setTimeout(() => {
+        status.textContent = "";
+      }, 2000);
+    })
+    .catch(() => {
+      status.textContent = "Copy failed";
+      status.style.color = "red";
+    });
+}
+</script>
+
+  </body>
+</html>

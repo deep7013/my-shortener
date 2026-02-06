@@ -1,0 +1,1101 @@
+from dotenv import load_dotenv
+from authlib.integrations.flask_client import OAuth
+import re
+
+# app.py
+
+import os
+
+load_dotenv()
+assert os.getenv("GOOGLE_CLIENT_ID"), "GOOGLE_CLIENT_ID not loaded"
+assert os.getenv("GOOGLE_CLIENT_SECRET"), "GOOGLE_CLIENT_SECRET not loaded"
+
+print("CLIENT ID OK:", os.getenv("GOOGLE_CLIENT_ID"))
+
+
+import io
+import qrcode
+import string
+import random
+import logging
+from typing import Optional
+from datetime import datetime, timezone, timedelta
+from urllib.parse import urlparse
+from flask import make_response
+from flask_jwt_extended import unset_jwt_cookies
+import secrets
+from passlib.hash import argon2
+
+
+
+from flask import (
+    Flask, request, redirect, render_template, url_for, flash, abort, send_file, jsonify
+)
+from flask_jwt_extended import JWTManager
+from flask_jwt_extended import create_access_token
+from flask_jwt_extended import jwt_required, get_jwt_identity
+from flask_sqlalchemy import SQLAlchemy
+from flask_migrate import Migrate
+from sqlalchemy import or_
+from flask_jwt_extended import set_access_cookies
+from cache import (
+    get_cached_url,
+    set_cached_url,
+    invalidate_cached_keys,
+)
+from functools import wraps
+from flask_jwt_extended import jwt_required, get_jwt_identity
+from flask_jwt_extended import unset_jwt_cookies
+
+from flask_jwt_extended import JWTManager
+from functools import wraps
+from flask import redirect
+
+print("SMTP USER:", os.getenv("SMTP_USER"))
+print("SMTP PASS LOADED:", bool(os.getenv("SMTP_PASS")))
+from utils.email import send_email
+
+
+
+def admin_required(fn):
+    @wraps(fn)
+    @jwt_required()
+    def wrapper(*args, **kwargs):
+        user_id = int(get_jwt_identity())
+        user = User.query.get(user_id)
+
+        if not user or user.role != "admin":
+            abort(403)
+
+        return fn(*args, **kwargs)
+    return wrapper
+
+
+
+
+# ---------- Logging ----------
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+# ---------- App & DB config ----------
+app = Flask(__name__)
+app.secret_key = os.getenv("SECRET_KEY")  # dev only
+# ---------------- JWT Cookie Config ----------------
+from datetime import timedelta
+
+app.config["JWT_ACCESS_TOKEN_EXPIRES"] = timedelta(days=7)
+
+app.config["JWT_TOKEN_LOCATION"] = ["cookies"]
+app.config["JWT_ACCESS_COOKIE_NAME"] = "access_token_cookie"
+app.config["JWT_COOKIE_SECURE"] = False          # True in HTTPS
+app.config["JWT_COOKIE_SAMESITE"] = "Lax"
+app.config["JWT_COOKIE_CSRF_PROTECT"] = False    # enable later
+from flask_jwt_extended import JWTManager
+from flask import redirect, url_for
+jwt = JWTManager(app)
+@jwt.unauthorized_loader
+def unauthorized(reason):
+    return jsonify({
+        "error": "UNAUTHORIZED",
+        "message": "Login required"
+    }), 401
+
+from flask_jwt_extended import verify_jwt_in_request, get_jwt_identity
+from flask import request
+
+def rate_limit_key():
+    try:
+        verify_jwt_in_request(optional=True)
+        uid = get_jwt_identity()
+        if uid:
+            return f"user:{uid}"
+    except:
+        pass
+    return f"anon:{request.remote_addr}"
+
+
+
+oauth = OAuth(app)
+oauth.register(
+    name="google",
+    client_id=os.getenv("GOOGLE_CLIENT_ID"),
+    client_secret=os.getenv("GOOGLE_CLIENT_SECRET"),
+    server_metadata_url="https://accounts.google.com/.well-known/openid-configuration",
+    client_kwargs={
+        "scope": "openid email profile"
+    },
+)
+def is_authenticated():
+    try:
+        verify_jwt_in_request(optional=True)
+        return get_jwt_identity() is not None
+    except Exception:
+        return False
+def get_optional_user_id():
+    try:
+        verify_jwt_in_request(optional=True)
+        uid = get_jwt_identity()
+        return int(uid) if uid else None
+    except Exception:
+        return None
+
+from authlib.common.security import generate_token
+from flask import session
+from sqlalchemy import func
+@app.route("/test-email")
+def test_email():
+    ok = send_email(
+        to_email="YOUR_PERSONAL_EMAIL@gmail.com",
+        subject="SMTP Test from My Shortener",
+        body="If you received this, SMTP is fully integrated 🎉"
+    )
+
+    return "EMAIL SENT ✅" if ok else "EMAIL FAILED ❌"
+@app.route("/dashboard")
+@jwt_required()
+def dashboard():
+    user_id = int(get_jwt_identity())
+    user = User.query.get_or_404(user_id)
+
+    # Links owned by this user
+    links = (
+        db.session.query(
+            Link,
+            func.count(ClickEvent.id).label("total_clicks"),
+            func.count(func.distinct(ClickEvent.ip_address)).label("unique_clicks"),
+            func.max(ClickEvent.created_at).label("last_click")
+        )
+        .outerjoin(ClickEvent, ClickEvent.link_id == Link.id)
+        .filter(Link.owner_id == user.id)
+        .group_by(Link.id)
+        .order_by(Link.created_at.desc())
+        .all()
+    )
+    last_shortened = (
+    Link.query
+    .filter(Link.owner_id == user.id)
+    .order_by(Link.created_at.desc())
+    .first()
+    )
+    last_used = (
+    db.session.query(Link)
+    .filter(Link.owner_id == user.id)
+    .filter(Link.last_clicked.isnot(None))
+    .order_by(Link.last_clicked.desc())
+    .first()
+)
+
+
+
+
+    return render_template(
+        "dashboard.html",
+        user=user,
+        links=links,
+        last_shortened=last_shortened,
+        last_used=last_used
+    )
+@app.route("/logout")
+def logout():
+    response = redirect(url_for("index"))
+    unset_jwt_cookies(response)
+    return response
+@app.route("/login/google")
+def login_google():
+    nonce = generate_token(16)
+    session["google_nonce"] = nonce
+
+    redirect_uri = url_for("google_callback", _external=True)
+    return oauth.google.authorize_redirect(
+        redirect_uri,
+        nonce=nonce,
+        prompt="select_account"
+    )
+
+
+from flask import make_response
+
+@app.route("/auth/google/callback")
+def google_callback():
+    token = oauth.google.authorize_access_token()
+    nonce = session.pop("google_nonce", None)
+
+    userinfo = oauth.google.parse_id_token(token, nonce=nonce)
+    email = userinfo["email"]
+    google_id = userinfo["sub"]
+
+    user = User.query.filter_by(email=email).first()
+    if not user:
+        return redirect(
+        url_for("index", error="GOOGLE_USER_NOT_FOUND")
+    )
+
+
+    access_token = create_access_token(identity=str(user.id))
+
+    # 🔑 ROLE BASED REDIRECT
+    if user.role == "admin":
+        redirect_url = url_for("admin")
+    else:
+        redirect_url = url_for("dashboard")
+
+    response = redirect(redirect_url)
+    set_access_cookies(response, access_token)
+    return response
+
+
+
+
+from flask_jwt_extended import get_jwt_identity
+
+@app.route("/api/admin/users/<int:user_id>", methods=["DELETE"])
+@jwt_required()
+@admin_required
+def admin_delete_user(user_id):
+    admin_id = int(get_jwt_identity())
+
+    if admin_id == user_id:
+        return jsonify({"error": "Admin cannot delete self"}), 400
+
+    user = User.query.get_or_404(user_id)
+
+    for link in user.links:
+        invalidate_cached_keys(link.slug, link.short)
+
+    db.session.delete(user)
+    db.session.commit()
+
+    return jsonify({
+        "message": "User deleted successfully",
+        "deleted_user_id": user_id
+    }), 200
+
+@app.route("/auth/success")
+def auth_success():
+    token = request.args.get("token")
+    if not token:
+        return "Missing token", 400
+
+    return f"""
+    <h2>Login Successful</h2>
+    <p><b>JWT:</b></p>
+    <textarea style="width:90%;height:120px">{token}</textarea>
+    """
+
+
+
+oauth.register(
+    name="github",
+    client_id=os.getenv("GITHUB_CLIENT_ID"),
+    client_secret=os.getenv("GITHUB_CLIENT_SECRET"),
+    access_token_url="https://github.com/login/oauth/access_token",
+    authorize_url="https://github.com/login/oauth/authorize",
+    api_base_url="https://api.github.com/",
+    client_kwargs={
+        "scope": "user:email"
+    },
+)
+@app.route("/whoami")
+@jwt_required()
+def whoami():
+    user_id = get_jwt_identity()
+    user = User.query.get(int(user_id))
+    return jsonify({
+        "email": user.email,
+        "provider": user.provider,
+        "role": user.role
+    })
+
+
+app.config["SQLALCHEMY_DATABASE_URI"] = os.getenv(
+    "DATABASE_URL",
+    "postgresql+psycopg2://shortener_user:root@localhost:5432/shortener",
+)
+print("DB URL USED BY FLASK:", app.config["SQLALCHEMY_DATABASE_URI"])
+
+
+app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
+
+db = SQLAlchemy(app)
+migrate = Migrate(app, db)
+from werkzeug.middleware.proxy_fix import ProxyFix
+
+app.wsgi_app = ProxyFix(
+    app.wsgi_app,
+    x_for=1,
+    x_proto=1,
+    x_host=1,
+    x_prefix=1
+)
+
+
+# ---------- Optional rate limiter ----------
+def rate_limit_decorator(rule):
+    return lambda f: f
+
+try:
+    from flask_limiter import Limiter
+    from flask_limiter.util import get_remote_address
+
+    limiter = Limiter(
+    key_func=rate_limit_key,
+    app=app,
+    default_limits=[]
+)
+
+
+    def rate_limit_decorator(rule):
+        return limiter.limit(rule)
+
+except Exception as e:
+    logger.warning(f"Rate limiter disabled: {e}")
+def dynamic_limit():
+    try:
+        verify_jwt_in_request(optional=True)
+        if get_jwt_identity():
+            return "10 per hour"
+    except Exception:
+        pass
+
+    return "5 per hour"
+
+from flask import redirect
+
+@limiter.request_filter
+def limit_exceeded_redirect():
+    return False
+@app.errorhandler(429)
+def ratelimit_handler(e):
+    if not is_authenticated():
+        return jsonify({
+            "error": "LOGIN_REQUIRED",
+            "message": "Free limit reached. Please sign in."
+        }), 401
+
+    return jsonify({
+        "error": "RATE_LIMIT",
+        "message": "Too many requests. Try later."
+    }), 429
+import smtplib
+from email.message import EmailMessage
+
+def send_otp_email(to_email, otp):
+    msg = EmailMessage()
+    msg["Subject"] = "Password Reset OTP"
+    msg["From"] = os.getenv("SMTP_USER")
+    msg["To"] = to_email
+    msg.set_content(f"""
+Your OTP is: {otp}
+
+This OTP expires in 10 minutes.
+If you did not request this, ignore this email.
+""")
+
+    with smtplib.SMTP_SSL("smtp.gmail.com", 465) as server:
+        server.login(
+            os.getenv("SMTP_USER"),
+            os.getenv("SMTP_PASS")
+        )
+        server.send_message(msg)
+@app.route("/api/auth/forgot-password", methods=["POST"])
+def forgot_password():
+    data = request.get_json() or {}
+    email = data.get("email")
+
+    if not email:
+        return jsonify({"error": "Email required"}), 400
+
+    user = User.query.filter_by(email=email).first()
+
+    # Always respond same (security)
+    if not user:
+        return jsonify({"message": "If email exists, OTP sent"}), 200
+
+    if not user.password_hash:
+        return jsonify({
+            "error": "GOOGLE_ACCOUNT",
+            "message": "This account uses Google Sign-In"
+        }), 400
+    PasswordResetOTP.query.filter_by(
+    email=email,
+    used=False
+    ).update({ "used": True })
+    db.session.commit()
+
+    # ✅ 1. Generate OTP
+    otp = generate_otp()
+
+    # ✅ 2. Store OTP hash
+    record = PasswordResetOTP(
+        email=email,
+        otp_hash=hash_otp(otp),
+        expires_at=now_utc() + timedelta(minutes=10)
+    )
+    db.session.add(record)
+    db.session.commit()
+
+    # ✅ 3. Send email
+    ok = send_email(
+        to_email=email,
+        subject="Password Reset OTP",
+        body=f"""
+Your OTP is: {otp}
+
+This OTP expires in 10 minutes.
+If you did not request this, ignore this email.
+"""
+    )
+
+    if not ok:
+        return jsonify({"error": "EMAIL_FAILED"}), 500
+
+    return jsonify({"message": "OTP sent"}), 200
+
+
+
+
+@app.route("/api/auth/verify-otp", methods=["POST"])
+@limiter.limit("5 per hour")
+def verify_otp_route():
+    data = request.get_json() or {}
+
+    email = data.get("email")
+    otp = (data.get("otp") or "").strip()
+
+
+    record = PasswordResetOTP.query.filter_by(
+        email=email,
+        used=False
+    ).order_by(PasswordResetOTP.created_at.desc()).first()
+
+    if not record:
+        return jsonify({"error": "Invalid OTP"}), 400
+
+    if record.expires_at < now_utc():
+        return jsonify({"error": "OTP expired"}), 400
+
+    if record.attempts >= 5:
+        return jsonify({"error": "Too many attempts"}), 429
+
+    if not verify_otp(otp, record.otp_hash):
+        record.attempts += 1
+        db.session.commit()
+        return jsonify({"error": "Invalid OTP"}), 400
+
+    record.used = True
+    db.session.commit()
+
+    return jsonify({"message": "OTP verified"}), 200
+@app.route("/api/auth/reset-password", methods=["POST"])
+@limiter.limit("3 per hour")
+def reset_password():
+    data = request.get_json() or {}
+
+    email = data.get("email")
+    new_password = data.get("new_password")
+
+    record = PasswordResetOTP.query.filter_by(
+        email=email,
+        used=True
+    ).order_by(PasswordResetOTP.created_at.desc()).first()
+
+    if not record:
+        return jsonify({"error": "OTP not verified"}), 400
+
+    user = User.query.filter_by(email=email).first()
+    user.set_password(new_password)
+
+    db.session.commit()
+
+    access_token = create_access_token(identity=str(user.id))
+
+    return jsonify({
+        "message": "Password reset successful",
+        "access_token": access_token
+    }), 200
+def check_password(self, password):
+    if not self.password_hash:
+        return False
+    return argon2.verify(password, self.password_hash)
+
+
+
+# ---------- Base62 encoding ----------
+ALPHABET = string.digits + string.ascii_lowercase + string.ascii_uppercase
+BASE = len(ALPHABET)
+
+def encode_base62(n: int) -> str:
+    if n == 0:
+        return ALPHABET[0]
+    out = []
+    while n:
+        n, rem = divmod(n, BASE)
+        out.append(ALPHABET[rem])
+    return ''.join(reversed(out))
+
+def now_utc():
+    return datetime.utcnow()
+
+
+def normalize_and_validate_url(raw_url: str):
+    raw_url = (raw_url or "").strip()
+    if not raw_url:
+        return None, "URL cannot be empty"
+
+    # Add https:// if missing
+    if not (raw_url.startswith("http://") or raw_url.startswith("https://")):
+        raw_url = "https://" + raw_url
+
+    try:
+        parsed = urlparse(raw_url)
+    except Exception:
+        return None, "URL format is invalid"
+
+    # Must have scheme and host part
+    if parsed.scheme not in ("http", "https"):
+        return None, "Only http and https URLs are allowed"
+
+    if not parsed.netloc:
+        return None, "URL must have a domain (like example.com)"
+
+    return raw_url, None
+@app.route("/forgot")
+def forgot():
+    return render_template("forgot.html")
+
+# ---------- Models ----------
+from passlib.hash import argon2
+class User(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    email = db.Column(db.String(120), unique=True, nullable=False)
+
+    password_hash = db.Column(db.String(255), nullable=True)
+    google_id = db.Column(db.String(255), nullable=True)
+
+    role = db.Column(db.String(20), default="user")
+    created_at = db.Column(db.DateTime, default=now_utc)
+
+    # ✅ ADD THIS BLOCK
+    links = db.relationship(
+        "Link",
+        backref="owner",
+        cascade="all, delete-orphan",
+        passive_deletes=True
+    )
+
+    def set_password(self, password):
+        self.password_hash = argon2.hash(password)
+
+    def check_password(self, password):
+        return argon2.verify(password, self.password_hash)
+
+    def __repr__(self):
+        return f"<User {self.email}>"
+
+class Link(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    slug = db.Column(db.String(64), unique=True, index=True, nullable=True)
+    short = db.Column(db.String(64), unique=True, index=True, nullable=True)
+    long = db.Column(db.Text, nullable=False, index=True)
+    owner_id = db.Column(
+    db.Integer,
+    db.ForeignKey("user.id", ondelete="CASCADE"),
+    nullable=True
+)
+
+    created_at = db.Column(db.DateTime, default=now_utc)
+    clicks = db.Column(db.Integer, default=0)
+    last_clicked = db.Column(db.DateTime, nullable=True)
+    expires_at = db.Column(db.DateTime(timezone=True), nullable=True)
+    vanity = db.Column(db.Boolean, default=False)
+
+    # ✅ ADD THIS
+    def is_expired(self):
+        if self.expires_at is None:
+            return False
+        return self.expires_at <= now_utc()
+class ClickEvent(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+
+    link_id = db.Column(
+        db.Integer,
+        db.ForeignKey("link.id", ondelete="CASCADE"),
+        nullable=False
+    )
+
+    user_id = db.Column(
+        db.Integer,
+        db.ForeignKey("user.id", ondelete="SET NULL"),
+        nullable=True
+    )
+
+    ip_address = db.Column(db.String(45), nullable=True)
+    user_agent = db.Column(db.Text, nullable=True)
+
+    created_at = db.Column(db.DateTime, default=now_utc)
+
+class PasswordResetOTP(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+
+    email = db.Column(db.String(120), index=True, nullable=False)
+
+    otp_hash = db.Column(db.String(255), nullable=False)
+
+    expires_at = db.Column(db.DateTime, nullable=False)
+
+    attempts = db.Column(db.Integer, default=0)
+
+    used = db.Column(db.Boolean, default=False)
+
+    created_at = db.Column(db.DateTime, default=now_utc)
+
+    verified_at = db.Column(db.DateTime, nullable=True)
+
+def generate_otp():
+    return str(secrets.randbelow(900000) + 100000)  # 6-digit
+
+def hash_otp(otp):
+    return argon2.hash(otp)
+
+def verify_otp(otp, otp_hash):
+    return argon2.verify(otp, otp_hash)
+# ---------- Helpers ----------
+def build_short_url(slug: str) -> str:
+    scheme = request.headers.get("X-Forwarded-Proto", request.scheme)
+    host = request.headers.get("X-Forwarded-Host", request.host)
+    return f"{scheme}://{host}/{slug}"
+
+def generate_unique_slug(base_slug: str) -> str:
+    slug = base_slug
+    charset = string.ascii_letters + string.digits
+    attempts = 0
+    max_attempts = 50
+    while Link.query.filter(or_(Link.slug == slug, Link.short == slug)).first():
+        attempts += 1
+        if attempts > max_attempts:
+            slug = base_slug + "-" + ''.join(random.choices(charset, k=6))
+            break
+        slug = base_slug + ''.join(random.choices(charset, k=3))
+    return slug
+def upsert_link_for_long_url(
+    long_url: str,
+    expires_at: Optional[datetime] = None,
+    vanity_slug: Optional[str] = None,
+    owner_id: Optional[int] = None
+):
+    print("🔥🔥 NEW FUNCTION HIT 🔥🔥")
+    print("vanity_slug =", vanity_slug)
+    print("owner_id =", owner_id)
+
+
+@app.route("/")
+def index():
+    return render_template("index.html")
+
+
+
+@app.route("/api/admin/users", methods=["GET"])
+@jwt_required()
+@admin_required
+def admin_list_users():
+    users = User.query.order_by(User.created_at.desc()).all()
+
+    return jsonify([
+        {
+            "id": u.id,
+            "email": u.email,
+            "role": u.role,
+            "created_at": u.created_at.isoformat(),
+            "link_count": len(u.links)
+        }
+        for u in users
+    ])
+
+@app.route("/shorten", methods=["POST"])
+def shorten():
+
+    abort(404)
+
+@app.route("/api/admin/poll", methods=["GET"])
+@jwt_required()
+@admin_required
+def admin_poll():
+    data = (
+        db.session.query(
+            Link.id,
+            Link.slug,
+            Link.long,
+            db.func.count(ClickEvent.id).label("clicks"),
+            db.func.max(ClickEvent.created_at).label("last_click")
+        )
+        .outerjoin(ClickEvent, ClickEvent.link_id == Link.id)
+        .group_by(Link.id)
+        .order_by(Link.created_at.desc())
+        .all()
+    )
+
+    return jsonify([
+        {
+            "id": l.id,
+            "slug": l.slug,
+            "long": l.long,
+            "clicks": l.clicks,
+            "last_click": l.last_click.isoformat() if l.last_click else None
+        }
+        for l in data
+    ])
+
+@app.route("/api/shorten", methods=["POST"])
+@limiter.limit(dynamic_limit)
+def api_shorten():
+    print("🚨 api_shorten HIT 🚨")
+    verify_jwt_in_request(optional=True)
+    user_id = get_jwt_identity()
+
+    data = request.get_json()
+    if not data or "long_url" not in data:
+        return jsonify({"error": "long_url is required"}), 400
+
+    raw_url = data.get("long_url")
+    vanity_slug = (data.get("vanity") or "").strip() or None
+    expires_days = data.get("expires_days")
+
+    # ✅ SLUG VALIDATION (SAFE)
+    if vanity_slug:
+        if not re.fullmatch(r"[a-zA-Z0-9_-]{3,30}", vanity_slug):
+            return jsonify({
+                "error": "Slug must be 3–30 chars and contain only letters, numbers, - or _"
+            }), 400
+
+    long_url, error = normalize_and_validate_url(raw_url)
+    if error:
+        return jsonify({"error": error}), 400
+
+    expires_at = None
+    if expires_days is not None:
+        try:
+            d = int(expires_days)
+            if d < 0:
+                raise ValueError
+            expires_at = now_utc() + timedelta(days=d)
+        except Exception:
+            return jsonify({"error": "Invalid expiry days"}), 400
+    if err:
+        return jsonify({"error": err}), 400
+
+    slug = link.slug or link.short
+    short_url = build_short_url(slug)
+
+    return jsonify({
+        "long_url": long_url,
+        "short_url": short_url,
+        "slug": slug,
+        "expires_at": link.expires_at.isoformat() if link.expires_at else None,
+        "vanity": link.vanity,
+        "logged_in": bool(user_id)
+    }), 200
+def upsert_link_for_long_url(
+    long_url,
+    expires_at=None,
+    vanity_slug=None,  
+    owner_id=None
+):
+    # VANITY CASE
+    if vanity_slug:
+        existing = Link.query.filter(
+            or_(Link.slug == vanity_slug, Link.short == vanity_slug)
+        ).first()
+
+        if existing:
+            return None, "Slug already taken"
+
+        link = Link(
+            slug=vanity_slug,
+            long=long_url,
+            owner_id=owner_id,
+            expires_at=expires_at,
+            vanity=True
+        )
+        db.session.add(link)
+        db.session.commit()
+        return link, None
+
+    # NORMAL CASE
+    link = Link(
+        long=long_url,
+        owner_id=owner_id,
+        expires_at=expires_at,
+        vanity=False
+    )
+
+    db.session.add(link)
+    db.session.commit()
+
+    # Generate base62 from DB ID
+    short_code = encode_base62(link.id)
+    link.short = short_code
+    db.session.commit()
+
+    return link, None
+# ---------- Redirect ----------
+@app.route("/<key>")
+def follow(key):
+    # 1) Try cache first (HOT PATH)
+    cached_url = get_cached_url(key)
+    if cached_url:
+        return redirect(cached_url)
+
+    # 2) Cache miss → DB lookup
+    link = Link.query.filter(or_(Link.slug == key, Link.short == key)).first()
+
+    if not link or link.is_expired():
+        invalidate_cached_keys(key, key)
+        abort(404)
+
+    # 3) Populate cache
+    set_cached_url(key, link.long, link.expires_at)
+
+    # 4) Update analytics counters (existing logic)
+    try:
+        link.clicks += 1
+        link.last_clicked = now_utc()
+        db.session.commit()
+    except Exception as e:
+        logger.warning(f"Analytics update failed for {key}: {e}")
+
+    # ✅ ADD THIS BLOCK (click event)
+    try:
+        verify_jwt_in_request(optional=True)
+        user_id = get_jwt_identity()
+    except Exception:
+        user_id = None
+
+    try:
+        event = ClickEvent(
+            link_id=link.id,
+            user_id=int(user_id) if user_id else None,
+            ip_address=request.remote_addr,
+            user_agent=request.headers.get("User-Agent")
+        )
+        db.session.add(event)
+        db.session.commit()
+    except Exception as e:
+        logger.warning(f"ClickEvent insert failed for {key}: {e}")
+
+    return redirect(link.long)
+
+# ---------- QR ----------
+@app.route("/qr/<key>")
+def qr(key):
+    link = Link.query.filter(or_(Link.slug == key, Link.short == key)).first()
+    if not link or link.is_expired():
+        return abort(404)
+
+    target = link.slug or link.short
+    url = build_short_url(target)
+
+    img = qrcode.make(url)
+    buf = io.BytesIO()
+    img.save(buf, format="PNG")
+    buf.seek(0)
+    return send_file(buf, mimetype="image/png", download_name=f"{key}.png")
+
+from sqlalchemy import func
+@app.route("/admin")
+@jwt_required()
+@admin_required
+def admin():
+    admin_user = User.query.get_or_404(int(get_jwt_identity()))
+
+    users = (
+        db.session.query(
+            User,
+            func.count(ClickEvent.id).label("click_count")
+        )
+        .outerjoin(ClickEvent, ClickEvent.user_id == User.id)
+        .group_by(User.id)
+        .order_by(User.created_at.desc())
+        .all()
+    )
+
+    links = Link.query.order_by(Link.created_at.desc()).all()
+
+    return render_template(
+        "admin.html",
+        users=users,
+        links=links,
+        current_user=admin_user   # ✅ GUARANTEED
+    )
+
+
+
+
+
+@app.route("/api/admin/analytics/links", methods=["GET"])
+@jwt_required()
+@admin_required
+def admin_link_analytics():
+    results = (
+        db.session.query(
+            Link.id,
+            Link.slug,
+            Link.long,
+            db.func.count(ClickEvent.id).label("clicks"),
+            db.func.max(ClickEvent.created_at).label("last_click")
+        )
+        .outerjoin(ClickEvent, ClickEvent.link_id == Link.id)
+        .group_by(Link.id)
+        .order_by(db.func.count(ClickEvent.id).desc())
+        .all()
+    )
+
+    return jsonify([
+        {
+            "link_id": r.id,
+            "slug": r.slug,
+            "long_url": r.long,
+            "clicks": r.clicks,
+            "last_click": r.last_click.isoformat() if r.last_click else None
+        }
+        for r in results
+    ])
+
+@app.route("/api/admin/analytics/users", methods=["GET"])
+@jwt_required()
+@admin_required
+def admin_user_analytics():
+    results = (
+        db.session.query(
+            User.id,
+            User.email,
+            db.func.count(ClickEvent.id).label("clicks")
+        )
+        .outerjoin(ClickEvent, ClickEvent.user_id == User.id)
+        .group_by(User.id)
+        .order_by(db.func.count(ClickEvent.id).desc())
+        .all()
+    )
+
+    return jsonify([
+        {
+            "user_id": r.id,
+            "email": r.email,
+            "clicks": r.clicks
+        }
+        for r in results
+    ])
+
+@app.route("/admin/delete/<int:link_id>", methods=["POST"])
+@jwt_required()
+@admin_required
+def admin_delete(link_id):
+    link = Link.query.get(link_id)
+    if link:
+        # Invalidate cache BEFORE delete (both keys)
+        invalidate_cached_keys(link.slug, link.short)
+
+        db.session.delete(link)
+        db.session.commit()
+        flash("Link deleted.")
+    else:
+        flash("Link not found.")
+
+    return redirect(url_for("admin"))
+
+@app.route("/admin/set_expiry/<int:link_id>", methods=["POST"])
+@jwt_required()
+@admin_required
+def admin_set_expiry(link_id):
+    days = (request.form.get("days", "") or "").strip()
+    link = Link.query.get(link_id)
+    if link:
+        try:
+            d = int(days)
+            if d < 0:
+                raise ValueError("Negative expiry not allowed")
+            link.expires_at = now_utc() + timedelta(days=d)
+            db.session.commit()
+            flash("Expiry updated.")
+
+            # Invalidate cache so new TTL is applied
+            invalidate_cached_keys(link.slug, link.short)
+
+        except Exception:
+            flash("Invalid expiry value.")
+    else:
+        flash("Link not found.")
+    return redirect(url_for("admin"))
+@app.route("/api/auth/signup", methods=["POST"])
+@rate_limit_decorator("10 per hour")
+def signup():
+    data = request.get_json(silent=True) or {}
+
+    email = data.get("email")
+    password = data.get("password")
+
+    if not email or not password:
+        return jsonify({"error": "Email and password required"}), 400
+
+    if User.query.filter_by(email=email).first():
+        return jsonify({"error": "User already exists"}), 409
+
+    user = User(email=email)
+    user.set_password(password)
+
+    db.session.add(user)
+    db.session.commit()
+
+    access_token = create_access_token(identity=str(user.id))
+
+    response = jsonify({"msg": "Signup successful"})
+    set_access_cookies(response, access_token)   # ✅ THIS LINE FIXES IT
+    return response, 201
+@app.route("/api/auth/login", methods=["POST"])
+def login():
+    data = request.get_json() or {}
+
+    email = data.get("email")
+    password = data.get("password")
+
+    user = User.query.filter_by(email=email).first()
+
+    if not user or not user.check_password(password):
+        return jsonify({"error": "Invalid credentials"}), 401
+
+    access_token = create_access_token(identity=str(user.id))
+
+    response = jsonify({"msg": "Login successful"})
+    set_access_cookies(response, access_token)
+    return response, 200
+
+
+@app.route("/signup")
+def signup_page():
+    return render_template("signup.html")
+
+
+@app.route("/api/admin/panel", methods=["GET"])
+@admin_required
+def admin_panel():
+    return jsonify({"msg": "Welcome admin"})
+@app.route("/me")
+@jwt_required()
+def me():
+    user = User.query.get(int(get_jwt_identity()))
+    return jsonify({
+    "email": user.email,
+    "auth_provider": "google" if user.google_id else "password",
+    "role": user.role
+})
+
+
+if __name__ == "__main__":
+    with app.app_context():
+        db.create_all()
+
+    app.run(
+        host="127.0.0.1",
+        port=5000,
+        debug=True,
+        use_reloader=False
+    )
